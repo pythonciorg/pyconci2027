@@ -1,0 +1,30 @@
+[project]
+name = "pycon_ci_backend"
+version = "0.1.0"
+description = "Backend API pour PyCon Côte d'Ivoire 2027"
+requires-python = ">=3.12"
+readme = "README.md"
+license = "MIT"
+authors = [
+  {name = "PythonCI Backend Team", email = "contact@pythonci.org"}
+]
+dependencies = [
+  "fastapi>=0.110.0",
+  "uvicorn[standard]>=0.24.0",
+  "sqlalchemy>=2.0.20",
+  "alembic>=1.11.0",
+  "asyncpg>=0.28.0",
+  "httpx>=0.25.0",
+  "python-dotenv>=1.0.0",
+  "passlib[bcrypt]>=1.8.0",
+  "python-jose>=3.0.0",
+  "qrcode>=7.0",
+  "pydantic>=2.7.0",
+  "pytest>=8.4.0",
+  "pytest-asyncio>=0.22.0",
+  "httpx>=0.25.0"
+]
+
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
