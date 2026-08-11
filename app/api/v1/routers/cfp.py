@@ -11,6 +11,8 @@ from app.tasks.email_tasks import send_notification_email
 
 router = APIRouter(prefix="/cfp", tags=["CFP"])
 
+REVIEWER_ROLES = (UserRole.admin, UserRole.moderator, UserRole.staff)
+
 
 @router.post("/submissions", response_model=CFPSubmissionRead)
 async def create_submission(
@@ -37,22 +39,32 @@ async def create_submission(
 
 @router.get("/submissions", response_model=list[CFPSubmissionRead])
 async def list_submissions(
-    status: SubmissionStatus | None = Query(None),
-    current_user=Depends(require_role(UserRole.admin, UserRole.moderator, UserRole.staff)),
+    status_filter: SubmissionStatus | None = Query(None, alias="status"),
+    current_user=Depends(require_role(*REVIEWER_ROLES)),
     db: AsyncSession = Depends(get_db),
 ):
     query = select(CFPSubmission)
-    if status:
-        query = query.where(CFPSubmission.status == status)
+    if status_filter:
+        query = query.where(CFPSubmission.status == status_filter)
     result = await db.execute(query)
     return result.scalars().all()
 
 
 @router.get("/submissions/{submission_id}", response_model=CFPSubmissionRead)
-async def get_submission(submission_id: int, current_user=Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def get_submission(
+    submission_id: int,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     submission = await db.get(CFPSubmission, submission_id)
     if not submission:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Soumission introuvable")
+
+    is_owner = submission.speaker_id == current_user.id
+    is_reviewer = current_user.role in REVIEWER_ROLES
+    if not (is_owner or is_reviewer):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès refusé")
+
     return submission
 
 
@@ -61,15 +73,19 @@ async def update_submission_status(
     submission_id: int,
     status_update: CFPSubmissionStatusUpdate,
     background_tasks: BackgroundTasks,
-    current_user=Depends(require_role(UserRole.admin, UserRole.moderator, UserRole.staff)),
+    current_user=Depends(require_role(*REVIEWER_ROLES)),
     db: AsyncSession = Depends(get_db),
 ):
     submission = await db.get(CFPSubmission, submission_id)
     if not submission:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Soumission introuvable")
+
+    if submission.status == status_update.status:
+        return submission
+
     submission.status = status_update.status
     await db.commit()
-    await db.refresh(submission)
+    await db.refresh(submission, attribute_names=["speaker"])
     send_notification_email(
         background_tasks,
         recipient=submission.speaker.email,

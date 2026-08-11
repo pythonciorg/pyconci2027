@@ -1,40 +1,29 @@
+"""${message}
+
+Revision ID: ${up_revision}
+Revises: ${down_revision | comma,n}
+Create Date: ${create_date}
+
+"""
 from __future__ import with_statement
 
-environment = '''
-from logging.config import fileConfig
-from sqlalchemy import pool
-from sqlalchemy import engine_from_config
-from alembic import context
+from typing import Sequence, Union
 
-config = context.config
-fileConfig(config.config_file_name)
+from alembic import op
+import sqlalchemy as sa
+${imports if imports else ""}
 
-target_metadata = None
-
-
-def run_migrations_offline():
-    url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle": "named"})
-
-    with context.begin_transaction():
-        context.run_migrations()
+# revision identifiers, used by Alembic.
+revision: str = ${repr(up_revision)}
+down_revision: Union[str, None] = ${repr(down_revision)}
+branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
+depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
 
 
-def run_migrations_online():
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+def upgrade() -> None:
+    ${upgrades if upgrades else "pass"}
 
-    with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
 
-        with context.begin_transaction():
-            context.run_migrations()
+def downgrade() -> None:
+    ${downgrades if downgrades else "pass"}
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
-'''

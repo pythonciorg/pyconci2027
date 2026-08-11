@@ -14,6 +14,7 @@ class OrderStatus(str, Enum):
     failed = "échoué"
     cancelled = "annulé"
 
+INACTIVE_ORDER_STATUSES = (OrderStatus.cancelled, OrderStatus.failed)
 
 class Order(Base):
     __tablename__ = "orders"

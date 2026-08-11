@@ -9,7 +9,7 @@ class TokenSchema(BaseModel):
 
 
 class TokenPayload(BaseModel):
-    sub: int
+    sub: str
     email: EmailStr
     role: str
     exp: datetime

@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     geniuspay_environment: str = Field("sandbox", env="GENIUSPAY_ENVIRONMENT")
     app_host: str = Field("0.0.0.0", env="APP_HOST")
     app_port: int = Field(8000, env="APP_PORT")
-
+    deepl_api_key: str | None = Field(None, env="DEEPL_API_KEY")
+    allowed_origins: str = Field("http://localhost:3000,http://localhost:5173", env="ALLOWED_ORIGINS")
     class Config:
         env_file = [".env", ".env.example"]
         env_file_encoding = "utf-8"

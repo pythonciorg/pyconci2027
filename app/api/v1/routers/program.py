@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.api.v1.deps import require_role
 from app.db.session import get_db
 from app.models.room import Room
 from app.models.session import Session
 from app.models.user import UserRole
 from app.schemas.program import RoomCreate, RoomRead, SessionCreate, SessionRead
-
+from app.services.translation_service import auto_translate_and_store
 router = APIRouter(prefix="/program", tags=["Programme"])
 
 
@@ -48,6 +47,17 @@ async def create_session(session_in: SessionCreate, db: AsyncSession = Depends(g
     db.add(session)
     await db.commit()
     await db.refresh(session)
+    await auto_translate_and_store(
+        db,
+        entity_type="session",
+        entity_id=session.id,
+        fields={
+            "title": session.title,
+            "description": session.description or "",
+            "topic": session.topic or "",
+            "level": session.level or "",
+        },
+    )
     return session
 
 

@@ -2,7 +2,6 @@ from datetime import datetime
 from enum import Enum
 from pydantic import BaseModel, Field
 
-
 class SubmissionStatus(str, Enum):
     submitted = "soumis"
     in_review = "en_revue"
@@ -39,3 +38,7 @@ class CFPSubmissionRead(BaseModel):
 
 class CFPSubmissionStatusUpdate(BaseModel):
     status: SubmissionStatus
+
+
+
+

@@ -11,7 +11,7 @@ class TicketCategoryRead(BaseModel):
     sale_start: date | None
     sale_end: date | None
     remaining_quota: int
-
+    sold: int
     model_config = {"from_attributes": True}
 
 

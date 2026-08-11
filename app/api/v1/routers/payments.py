@@ -156,9 +156,9 @@ async def geniuspay_webhook(
         )
     elif event_type in {"payment.failed", "payment.expired", "payment.cancelled"}:
         order.status = OrderStatus.failed
-        ticket_category = await db.get(TicketCategory, order.ticket_category_id)
-        if ticket_category:
-            ticket_category.quota += order.quantity
+        # Le quota n'a jamais été décrémenté à la commande (voir orders.py) —
+        # il n'y a donc rien à rembourser ici. Le "restant" se recalcule
+        # automatiquement dès que le statut passe hors des statuts actifs.
         payment = await db.execute(select(Payment).filter_by(order_id=order.id))
         payment_obj = payment.scalar_one_or_none()
         if payment_obj:
