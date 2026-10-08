@@ -19,6 +19,7 @@
 - [Documentation de l'API](#-documentation-de-lapi)
 - [Modules fonctionnels](#-modules-fonctionnels)
 - [Authentification & rôles](#-authentification--rôles)
+- [Mot de passe oublié](#-mot-de-passe-oublié)
 - [Modèle de gestion des quotas](#-modèle-de-gestion-des-quotas-billetterie)
 - [Multilinguisme (FR / EN)](#-multilinguisme-fr--en)
 - [Sécurité](#-sécurité)
@@ -141,6 +142,15 @@ Renseigner ensuite les valeurs réelles dans `.env` (voir section suivante).
 | `JWT_ALGORITHM` | Algorithme de signature JWT | `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Durée de vie du token d'accès | `60` |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Durée de vie du token de rafraîchissement | `7` |
+| `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | Durée de validité du lien de réinitialisation du mot de passe | `30` |
+| `FRONTEND_URL` | Adresse du site, utilisée dans le lien de réinitialisation | `https://pycon.ci` |
+| `SMTP_HOST` | Serveur SMTP ; vide = emails affichés dans la console | `smtp.gmail.com` |
+| `SMTP_PORT` | Port SMTP | `587` |
+| `SMTP_USER` | Compte d'envoi | `adresse@gmail.com` |
+| `SMTP_PASSWORD` | Mot de passe SMTP (mot de passe d'application pour Gmail) | *(secret)* |
+| `SMTP_FROM` | Expéditeur affiché (par défaut : `SMTP_USER`) | `PyCon CI <adresse@gmail.com>` |
+| `SMTP_STARTTLS` | Chiffrement STARTTLS (port 587) | `true` |
+| `SMTP_USE_SSL` | Connexion SSL directe (port 465) | `false` |
 | `GENIUSPAY_API_KEY` | Clé API du prestataire de paiement | `pk_sandbox_...` |
 | `GENIUSPAY_API_SECRET` | Secret API GeniusPay | `sk_sandbox_...` |
 | `GENIUSPAY_WEBHOOK_SECRET` | Secret de vérification des webhooks | `wh_sandbox_...` |
@@ -194,7 +204,7 @@ Chaque route peut être testée directement depuis `/docs`, y compris les routes
 
 | Module | Description |
 |---|---|
-| **Auth** | Inscription, connexion, rafraîchissement de token, profil courant |
+| **Auth** | Inscription, connexion, rafraîchissement de token, mot de passe oublié, profil courant |
 | **CFP** | Soumission et gestion des propositions de conférences (talks / ateliers) |
 | **Billetterie** | Catégories de billets, commandes, paiement, e-billets avec QR code |
 | **Programme** | Salles et sessions du programme, avec filtres |
@@ -226,6 +236,81 @@ L'authentification repose sur des **tokens JWT** :
 | `admin` | Accès complet au back-office |
 
 Les routes protégées utilisent la dépendance `require_role(...)`, qui accepte un ou plusieurs rôles autorisés.
+
+---
+
+## 🔁 Mot de passe oublié
+
+La réinitialisation se fait par un **lien envoyé par email**. Le lien contient un token ; l'utilisateur ne le voit et ne le copie jamais, c'est la page du site qui le lit dans l'adresse.
+
+### Parcours de l'utilisateur
+
+1. Sur la page de connexion, il clique sur « Mot de passe oublié ? ».
+2. Sur la page `/forgot-password`, il saisit son email. Le site appelle `POST /auth/forgot-password`.
+3. Il reçoit un email avec un lien `{FRONTEND_URL}/reset-password?token=...`.
+4. Il clique. La page `/reset-password` récupère le `token` dans l'URL et lui demande son nouveau mot de passe.
+5. Le site appelle `POST /auth/reset-password` avec le token et le nouveau mot de passe, puis redirige vers la connexion.
+
+### Appels API
+
+| Route | Corps de la requête | Réponse |
+|---|---|---|
+| `POST /auth/forgot-password` | `{"email": "..."}` | `200` avec un message générique, que l'email existe ou non |
+| `POST /auth/reset-password` | `{"token": "...", "new_password": "..."}` | `200` si le mot de passe est changé |
+
+Codes d'erreur à gérer côté site pour `reset-password` :
+
+| Code | Signification | Quoi afficher |
+|---|---|---|
+| `400` | Lien invalide, expiré ou déjà utilisé | Proposer de redemander un lien |
+| `422` | Mot de passe trop court (moins de 8 caractères) ou JSON mal formé | Message de validation |
+| `429` | Trop de tentatives | Demander de patienter une minute |
+
+Exemple pour la page `/reset-password` :
+
+```js
+const token = new URLSearchParams(window.location.search).get("token");
+
+const res = await fetch(`${API_URL}/auth/reset-password`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ token, new_password: password }),
+});
+
+if (res.ok) {
+  // succès → rediriger vers /login
+} else if (res.status === 400) {
+  // lien invalide ou expiré → proposer d'en redemander un
+}
+```
+
+### Règles de sécurité
+
+- Le lien expire au bout de **30 minutes** (`PASSWORD_RESET_TOKEN_EXPIRE_MINUTES`).
+- Il ne fonctionne **qu'une seule fois** : dès que le mot de passe change, il est rejeté.
+- Il ne sert qu'à changer le mot de passe, pas à se connecter.
+- `forgot-password` renvoie toujours la même réponse, pour ne pas révéler quels emails ont un compte. Le site doit afficher le même message dans tous les cas.
+- Les sessions déjà ouvertes ne sont pas déconnectées : les anciens tokens restent valables jusqu'à leur expiration.
+
+### Envoi des emails (SMTP)
+
+Les emails partent par SMTP dès que `SMTP_HOST` est renseigné dans `.env`. Si `SMTP_HOST` est vide, ils sont simplement affichés dans la console du serveur, ce qui suffit en développement.
+
+Exemple avec Gmail :
+
+```env
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=adresse@gmail.com
+SMTP_PASSWORD=mot_de_passe_d_application
+SMTP_FROM=PyCon CI <adresse@gmail.com>
+```
+
+Pour Gmail, `SMTP_PASSWORD` doit être un **mot de passe d'application** (https://myaccount.google.com/apppasswords, validation en deux étapes requise), pas le mot de passe du compte. Si l'envoi échoue, l'erreur est écrite dans les logs du serveur et la requête de l'utilisateur n'échoue pas.
+
+### Tester sans le site
+
+Tant que la page `/reset-password` n'existe pas, le parcours se teste dans Swagger : appeler `forgot-password`, copier ce qui suit `token=` dans le lien reçu, puis le coller dans `reset-password`.
 
 ---
 
@@ -282,7 +367,7 @@ GET /translations/?entity_type=article&entity_id=1&language=en
 
 | Mesure | Détail |
 |---|---|
-| **Rate limiting** | `POST /auth/login` et `/auth/register` : 5 requêtes/minute par IP · `POST /conduct-reports/` : 3 requêtes/heure par IP |
+| **Rate limiting** | `POST /auth/login`, `/auth/register` et `/auth/reset-password` : 5 requêtes/minute par IP · `POST /auth/forgot-password` : 3 requêtes/minute par IP · `POST /conduct-reports/` : 3 requêtes/heure par IP |
 | **Validation stricte** | Longueurs minimales et maximales sur les champs sensibles (ex. signalements : 10 à 3000 caractères) |
 | **Taille des requêtes** | Corps de requête limité à 1 Mo, rejeté avec `413` au-delà |
 | **CORS** | Origines strictement limitées via `ALLOWED_ORIGINS`, jamais de wildcard combiné aux identifiants |
@@ -379,6 +464,8 @@ docker exec -it pyconci_api alembic downgrade <revision>
 | POST | `/auth/register` | Public |
 | POST | `/auth/login` | Public |
 | POST | `/auth/refresh` | Public |
+| POST | `/auth/forgot-password` | Public |
+| POST | `/auth/reset-password` | Public (token reçu par email) |
 | GET | `/auth/me` | Authentifié |
 
 ### CFP
@@ -472,7 +559,7 @@ docker exec -it pyconci_api alembic downgrade <revision>
 
 Développement réalisé sur un chronogramme de **deux semaines** (02 → 16 août 2026), couvrant successivement : mise en place du projet, authentification, CFP, billetterie, paiement, programme, intervenants, sponsors, blog, code de conduite, back-office, multilinguisme, sécurité, sauvegardes, tests automatisés, puis une phase finale de **revue de code et de préparation à l'intégration front-end**.
 
-> ✅ 20 tests automatisés passants · Documentation Swagger complète · Sauvegardes automatisées validées · CORS et modèle de quotas consolidés pour l'intégration front-end.
+> ✅ 23 tests automatisés passants · Documentation Swagger complète · Sauvegardes automatisées validées · CORS et modèle de quotas consolidés pour l'intégration front-end.
 
 ---
 

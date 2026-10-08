@@ -147,12 +147,12 @@ async def geniuspay_webhook(
         for ticket in tickets:
             qr_bytes = generate_qr_code(ticket.qr_code)
             attachments.append({"filename": f"ticket_{ticket.id}.png", "content": qr_bytes})
-        background_tasks.add_task(
-            send_notification_email,
-            order.customer_email,
-            "Paiement confirmé",
-            "Votre commande a été payée avec succès. Vous recevrez vos e-billets bientôt.",
-            attachments,
+        send_notification_email(
+            background_tasks,
+            recipient=order.customer_email,
+            subject="Paiement confirmé",
+            message="Votre commande a été payée avec succès. Vous recevrez vos e-billets bientôt.",
+            attachments=attachments,
         )
     elif event_type in {"payment.failed", "payment.expired", "payment.cancelled"}:
         order.status = OrderStatus.failed

@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -30,6 +32,22 @@ def create_refresh_token(data: dict[str, Any], expires_delta: timedelta | None =
     expire = datetime.utcnow() + (expires_delta or timedelta(days=settings.refresh_token_expire_days))
     to_encode.update({"exp": expire, "type": "refresh"})
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def _password_fingerprint(hashed_password: str) -> str:
+    return hashlib.sha256(hashed_password.encode()).hexdigest()[:16]
+
+
+def create_password_reset_token(user_id: int, hashed_password: str) -> str:
+    # L'empreinte du hash actuel rend le token à usage unique : dès que le mot de
+    # passe change, l'empreinte ne correspond plus et le token est rejeté.
+    expire = datetime.utcnow() + timedelta(minutes=settings.password_reset_token_expire_minutes)
+    to_encode = {"sub": str(user_id), "pwd": _password_fingerprint(hashed_password), "exp": expire, "type": "reset"}
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def verify_password_reset_token(payload: dict[str, Any], hashed_password: str) -> bool:
+    return hmac.compare_digest(str(payload.get("pwd", "")), _password_fingerprint(hashed_password))
 
 
 def decode_token(token: str) -> dict[str, Any]:
