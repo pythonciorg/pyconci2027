@@ -22,6 +22,14 @@ class CFPSubmissionCreate(BaseModel):
     format: SubmissionFormat
 
 
+class CFPSubmissionUpdate(BaseModel):
+    title: str | None = Field(None, max_length=255)
+    description: str | None = Field(None, max_length=5000)
+    topic: str | None = Field(None, max_length=120)
+    level: str | None = Field(None, max_length=80)
+    format: SubmissionFormat | None = None
+
+
 class CFPSubmissionRead(BaseModel):
     id: int
     speaker_id: int

@@ -6,7 +6,7 @@ from app.api.v1.deps import require_role, get_current_user
 from app.db.session import get_db
 from app.models.cfp_submission import CFPSubmission, SubmissionStatus
 from app.models.user import UserRole
-from app.schemas.cfp import CFPSubmissionCreate, CFPSubmissionRead, CFPSubmissionStatusUpdate
+from app.schemas.cfp import CFPSubmissionCreate, CFPSubmissionRead, CFPSubmissionStatusUpdate, CFPSubmissionUpdate
 from app.tasks.email_tasks import send_notification_email
 
 router = APIRouter(prefix="/cfp", tags=["CFP"])
@@ -65,6 +65,34 @@ async def get_submission(
     if not (is_owner or is_reviewer):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès refusé")
 
+    return submission
+
+
+@router.patch("/submissions/{submission_id}", response_model=CFPSubmissionRead)
+async def update_submission(
+    submission_id: int,
+    submission_in: CFPSubmissionUpdate,
+    current_user=Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    submission = await db.get(CFPSubmission, submission_id)
+    if not submission:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Soumission introuvable")
+
+    if submission.speaker_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès refusé")
+
+    if submission.status != SubmissionStatus.submitted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Soumission déjà en revue, modification impossible",
+        )
+
+    for field, value in submission_in.model_dump(exclude_unset=True).items():
+        setattr(submission, field, value)
+
+    await db.commit()
+    await db.refresh(submission)
     return submission
 
 

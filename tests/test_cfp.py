@@ -166,3 +166,115 @@ async def test_update_submission_status_as_admin(client, db_session):
 
     assert response.status_code == 200
     assert response.json()["status"] == "accepté"
+
+SUBMISSION_PAYLOAD = {
+    "title": "Talk à modifier",
+    "description": "Une description suffisamment longue pour passer la validation.",
+    "topic": "Backend",
+    "level": "Débutant",
+    "format": "talk",
+}
+
+
+@pytest.mark.asyncio
+async def test_update_submission_by_owner(client):
+    token = await _register_and_login(client, email="speaker6@pyconci.ci")
+    create_response = await client.post(
+        "/cfp/submissions",
+        json=SUBMISSION_PAYLOAD,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    submission_id = create_response.json()["id"]
+
+    response = await client.patch(
+        f"/cfp/submissions/{submission_id}",
+        json={"title": "Titre modifié", "format": "atelier"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "Titre modifié"
+    assert data["format"] == "atelier"
+    # Les champs non envoyés restent inchangés.
+    assert data["topic"] == "Backend"
+    assert data["status"] == "soumis"
+
+
+@pytest.mark.asyncio
+async def test_update_submission_not_owner(client):
+    owner_token = await _register_and_login(client, email="speaker7@pyconci.ci")
+    create_response = await client.post(
+        "/cfp/submissions",
+        json=SUBMISSION_PAYLOAD,
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    submission_id = create_response.json()["id"]
+
+    other_token = await _register_and_login(client, email="intrus@pyconci.ci")
+    response = await client.patch(
+        f"/cfp/submissions/{submission_id}",
+        json={"title": "Piratage"},
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_update_submission_not_found(client):
+    token = await _register_and_login(client, email="speaker8@pyconci.ci")
+
+    response = await client.patch(
+        "/cfp/submissions/9999",
+        json={"title": "Inexistant"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_submission_cannot_change_status(client):
+    token = await _register_and_login(client, email="speaker9@pyconci.ci")
+    create_response = await client.post(
+        "/cfp/submissions",
+        json=SUBMISSION_PAYLOAD,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    submission_id = create_response.json()["id"]
+
+    response = await client.patch(
+        f"/cfp/submissions/{submission_id}",
+        json={"status": "accepté"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "soumis"
+
+
+@pytest.mark.asyncio
+async def test_update_submission_blocked_once_in_review(client, db_session):
+    speaker_token = await _register_and_login(client, email="speaker10@pyconci.ci")
+    create_response = await client.post(
+        "/cfp/submissions",
+        json=SUBMISSION_PAYLOAD,
+        headers={"Authorization": f"Bearer {speaker_token}"},
+    )
+    submission_id = create_response.json()["id"]
+
+    admin_token = await _create_admin_and_login(client, db_session)
+    await client.patch(
+        f"/cfp/submissions/{submission_id}/status",
+        json={"status": "en_revue"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+
+    response = await client.patch(
+        f"/cfp/submissions/{submission_id}",
+        json={"title": "Trop tard"},
+        headers={"Authorization": f"Bearer {speaker_token}"},
+    )
+
+    assert response.status_code == 409
