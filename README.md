@@ -20,6 +20,7 @@
 - [Modules fonctionnels](#-modules-fonctionnels)
 - [Authentification & rôles](#-authentification--rôles)
 - [Mot de passe oublié](#-mot-de-passe-oublié)
+- [Propositions CFP](#-propositions-cfp)
 - [Modèle de gestion des quotas](#-modèle-de-gestion-des-quotas-billetterie)
 - [Multilinguisme (FR / EN)](#-multilinguisme-fr--en)
 - [Sécurité](#-sécurité)
@@ -308,9 +309,43 @@ SMTP_FROM=PyCon CI <adresse@gmail.com>
 
 Pour Gmail, `SMTP_PASSWORD` doit être un **mot de passe d'application** (https://myaccount.google.com/apppasswords, validation en deux étapes requise), pas le mot de passe du compte. Si l'envoi échoue, l'erreur est écrite dans les logs du serveur et la requête de l'utilisateur n'échoue pas.
 
+Si les logs affichent `Connection unexpectedly closed` ou `WinError 10053` alors que les identifiants sont bons, un antivirus intercepte probablement le SMTP (par exemple le « Mail Shield » d'AVG ou d'Avast). Ajouter une exception pour `smtp.gmail.com` et pour le Python du projet, ou désactiver l'analyse des emails sortants.
+
 ### Tester sans le site
 
 Tant que la page `/reset-password` n'existe pas, le parcours se teste dans Swagger : appeler `forgot-password`, copier ce qui suit `token=` dans le lien reçu, puis le coller dans `reset-password`.
+
+---
+
+## 🎤 Propositions CFP
+
+Un speaker connecté soumet une proposition (talk ou atelier) avec `POST /cfp/submissions`. Elle suit ensuite ce cycle, piloté par les reviewers (admin, modérateur, staff) via `PATCH /cfp/submissions/{id}/status` :
+
+```
+soumis → en_revue → accepté / refusé
+```
+
+Le speaker reçoit un email à chaque changement de statut.
+
+### Modifier une proposition
+
+L'auteur peut modifier sa proposition avec `PATCH /cfp/submissions/{id}`, **tant qu'elle est au statut `soumis`**. Dès qu'un reviewer la passe `en_revue`, elle est figée, pour que l'évaluation porte sur une version stable.
+
+Seuls les champs envoyés sont modifiés :
+
+```json
+{ "title": "Nouveau titre", "format": "atelier" }
+```
+
+Champs modifiables : `title`, `description`, `topic`, `level`, `format`. Le `status` n'est pas modifiable par cette route ; s'il est envoyé, il est ignoré.
+
+| Code | Signification |
+|---|---|
+| `200` | Proposition modifiée |
+| `403` | L'utilisateur n'est pas l'auteur de la proposition |
+| `404` | Proposition introuvable |
+| `409` | Proposition déjà en revue, acceptée ou refusée : modification impossible |
+| `422` | Champ invalide (ex. titre de plus de 255 caractères) |
 
 ---
 
@@ -474,6 +509,7 @@ docker exec -it pyconci_api alembic downgrade <revision>
 | POST | `/cfp/submissions` | Authentifié |
 | GET | `/cfp/submissions` | Admin / Modérateur / Staff |
 | GET | `/cfp/submissions/{id}` | Authentifié |
+| PATCH | `/cfp/submissions/{id}` | Auteur de la proposition, tant qu'elle est `soumis` |
 | PATCH | `/cfp/submissions/{id}/status` | Admin / Modérateur / Staff |
 
 ### Back-office CFP
@@ -559,7 +595,7 @@ docker exec -it pyconci_api alembic downgrade <revision>
 
 Développement réalisé sur un chronogramme de **deux semaines** (02 → 16 août 2026), couvrant successivement : mise en place du projet, authentification, CFP, billetterie, paiement, programme, intervenants, sponsors, blog, code de conduite, back-office, multilinguisme, sécurité, sauvegardes, tests automatisés, puis une phase finale de **revue de code et de préparation à l'intégration front-end**.
 
-> ✅ 23 tests automatisés passants · Documentation Swagger complète · Sauvegardes automatisées validées · CORS et modèle de quotas consolidés pour l'intégration front-end.
+> ✅ 28 tests automatisés passants · Documentation Swagger complète · Sauvegardes automatisées validées · CORS et modèle de quotas consolidés pour l'intégration front-end.
 
 ---
 
