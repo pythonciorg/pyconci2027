@@ -36,6 +36,20 @@ class ResetPasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=8)
 
 
+class OTPChallenge(BaseModel):
+    message: str
+    otp_token: str
+
+
+class OTPResend(BaseModel):
+    otp_token: str
+
+
+class OTPVerify(BaseModel):
+    otp_token: str
+    code: str = Field(..., pattern=r"^\d{6}$")
+
+
 class MessageResponse(BaseModel):
     message: str
 

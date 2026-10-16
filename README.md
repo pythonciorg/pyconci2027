@@ -19,6 +19,7 @@
 - [Documentation de l'API](#-documentation-de-lapi)
 - [Modules fonctionnels](#-modules-fonctionnels)
 - [Authentification & rôles](#-authentification--rôles)
+- [Code de vérification par email](#-code-de-vérification-par-email)
 - [Mot de passe oublié](#-mot-de-passe-oublié)
 - [Propositions CFP](#-propositions-cfp)
 - [Modèle de gestion des quotas](#-modèle-de-gestion-des-quotas-billetterie)
@@ -144,6 +145,7 @@ Renseigner ensuite les valeurs réelles dans `.env` (voir section suivante).
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Durée de vie du token d'accès | `60` |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Durée de vie du token de rafraîchissement | `7` |
 | `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` | Durée de validité du lien de réinitialisation du mot de passe | `30` |
+| `OTP_EXPIRE_MINUTES` | Durée de validité du code de connexion envoyé par email | `10` |
 | `FRONTEND_URL` | Adresse du site, utilisée dans le lien de réinitialisation | `https://pycon.ci` |
 | `SMTP_HOST` | Serveur SMTP ; vide = emails affichés dans la console | `smtp.gmail.com` |
 | `SMTP_PORT` | Port SMTP | `587` |
@@ -197,7 +199,7 @@ FastAPI génère automatiquement une documentation interactive complète :
 - **Redoc** : http://localhost:8000/redoc
 - **Schéma OpenAPI brut** : http://localhost:8000/openapi.json
 
-Chaque route peut être testée directement depuis `/docs`, y compris les routes protégées via le bouton **Authorize** (coller le token JWT obtenu via `/auth/login`).
+Chaque route peut être testée directement depuis `/docs`, y compris les routes protégées via le bouton **Authorize** (coller l'`access_token` obtenu via `/auth/login` puis `/auth/otp/verify`).
 
 ---
 
@@ -222,10 +224,14 @@ Chaque route peut être testée directement depuis `/docs`, y compris les routes
 
 L'authentification repose sur des **tokens JWT** :
 
-1. `POST /auth/register` — création de compte (rôle `participant` par défaut)
-2. `POST /auth/login` — renvoie un `access_token` (courte durée) et un `refresh_token` (longue durée)
-3. `POST /auth/refresh` — renouvelle les tokens sans ressaisir le mot de passe
-4. `GET /auth/me` — profil de l'utilisateur connecté
+1. `POST /auth/register` — création de compte (rôle `participant` par défaut) ; un code à 6 chiffres est envoyé par email et un `otp_token` est renvoyé
+2. `POST /auth/login` — vérifie l'email et le mot de passe ; un code à 6 chiffres est envoyé par email et un `otp_token` est renvoyé
+3. `POST /auth/otp/verify` — échange l'`otp_token` et le code contre un `access_token` (courte durée) et un `refresh_token` (longue durée)
+4. `POST /auth/otp/resend` — renvoie un nouveau code à partir de l'`otp_token` (bouton « Renvoyer le code »)
+5. `POST /auth/refresh` — renouvelle les tokens sans ressaisir le mot de passe ni de code
+6. `GET /auth/me` — profil de l'utilisateur connecté
+
+Les tokens ne sont jamais renvoyés par `/auth/register` ni `/auth/login` : il faut toujours passer par le code (voir [Code de vérification par email](#-code-de-vérification-par-email)).
 
 ### Rôles disponibles
 
@@ -237,6 +243,250 @@ L'authentification repose sur des **tokens JWT** :
 | `admin` | Accès complet au back-office |
 
 Les routes protégées utilisent la dépendance `require_role(...)`, qui accepte un ou plusieurs rôles autorisés.
+
+---
+
+## 📩 Code de vérification par email
+
+À l'**inscription** comme à chaque **connexion**, un **code à 6 chiffres** est envoyé par email. C'est ce code, et non le mot de passe seul, qui donne accès aux tokens. L'utilisateur ne saisit **que le code**, pas son email.
+
+### Parcours de l'utilisateur
+
+1. **Inscription** : il remplit le formulaire, le site appelle `POST /auth/register`. **Connexion** : il saisit email et mot de passe, le site appelle `POST /auth/login`.
+2. Les deux routes renvoient un `otp_token`. Le site le **garde en mémoire sans l'afficher** : il indique au serveur à quel compte appartient le code.
+3. Le site affiche un écran « Saisissez le code reçu par email ». L'utilisateur reçoit un email « Votre code de connexion PyCon CI ».
+4. Il saisit le code. Le site appelle `POST /auth/otp/verify` avec l'`otp_token` et le code, et reçoit `access_token` et `refresh_token`.
+5. S'il n'a pas reçu le code, il clique sur **« Renvoyer le code »**. Le site appelle `POST /auth/otp/resend` avec l'`otp_token` gardé, et **remplace** l'`otp_token` par celui de la réponse. Il faut attendre **60 secondes** entre deux envois.
+6. Si l'`otp_token` a expiré (plus de 10 minutes), le renvoi est refusé : l'utilisateur se reconnecte (`/auth/login`). C'est aussi valable juste après l'inscription, puisque le compte existe déjà.
+
+### Appels API
+
+| Route | Corps de la requête | Réponse |
+|---|---|---|
+| `POST /auth/register` | `{"email": "...", "full_name": "...", "password": "..."}` | `200` avec `{"message": "...", "otp_token": "..."}` · `400` si l'email est déjà utilisé |
+| `POST /auth/login` | `{"email": "...", "password": "..."}` | `200` avec `{"message": "...", "otp_token": "..."}` · `401` si email ou mot de passe incorrect |
+| `POST /auth/otp/verify` | `{"otp_token": "...", "code": "123456"}` | `200` avec `access_token` et `refresh_token` |
+| `POST /auth/otp/resend` | `{"otp_token": "..."}` | `200` avec `{"message": "...", "otp_token": "..."}` (**nouveau** `otp_token`) · `429` si moins de 60 s depuis le dernier envoi · `400` si l'`otp_token` est invalide ou expiré |
+
+Exemple côté site :
+
+```js
+// 1. Connexion (ou inscription) : on garde l'otp_token sans l'afficher
+const res = await fetch(`${API_URL}/auth/login`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ email, password }),
+});
+const { otp_token } = await res.json();
+
+// 2. L'utilisateur saisit uniquement le code reçu par email
+const verify = await fetch(`${API_URL}/auth/otp/verify`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ otp_token, code }),
+});
+const { access_token, refresh_token } = await verify.json();
+
+// 3. Bouton « Renvoyer le code » : on remplace l'otp_token gardé par le nouveau
+const resend = await fetch(`${API_URL}/auth/otp/resend`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ otp_token }),
+});
+if (resend.ok) {
+  otp_token = (await resend.json()).otp_token;
+} else if (resend.status === 429) {
+  const secondes = resend.headers.get("Retry-After"); // ex. « Renvoyer le code (45 s) »
+} else if (resend.status === 400) {
+  // otp_token expiré : renvoyer vers la page de connexion
+}
+```
+
+Codes d'erreur à gérer côté site pour `otp/verify` :
+
+| Code | Signification | Quoi afficher |
+|---|---|---|
+| `400` | Code faux, expiré, déjà utilisé, ou trop d'essais | « Code invalide ou expiré » ; après plusieurs échecs, renvoyer vers la connexion |
+| `422` | Le code n'est pas composé de 6 chiffres | Message de validation |
+| `429` | Trop de tentatives | Demander de patienter une minute |
+
+Codes d'erreur à gérer côté site pour `otp/resend` :
+
+| Code | Signification | Quoi afficher |
+|---|---|---|
+| `400` | `otp_token` invalide ou expiré (« Demande expirée, veuillez vous reconnecter ») | Renvoyer vers la page de connexion |
+| `429` | Moins de 60 secondes depuis le dernier envoi (l'en-tête `Retry-After` donne le nombre de secondes restantes), ou plus de 3 demandes par minute | Désactiver le bouton et afficher un compte à rebours |
+
+### Règles de sécurité
+
+- Le code et l'`otp_token` expirent au bout de **10 minutes** (`OTP_EXPIRE_MINUTES`).
+- Le code ne fonctionne **qu'une seule fois**, et chaque nouvel envoi (connexion ou renvoi) annule le code précédent.
+- Après **5 codes faux**, le code est annulé : il faut en redemander un (« Renvoyer le code ») ou se reconnecter.
+- **60 secondes minimum** entre deux renvois, pour éviter d'inonder la boîte mail de l'utilisateur.
+- Le code est stocké haché (HMAC avec la clé secrète), jamais en clair.
+- Le code d'un compte ne peut pas ouvrir un autre compte : l'`otp_token` désigne le compte, le code doit être le sien.
+- L'`otp_token` ne donne accès à rien d'autre : il ne remplace ni l'`access_token`, ni le `refresh_token`.
+
+### Envoi du code par email
+
+#### Quand le code est-il envoyé ?
+
+| Action de l'utilisateur | Route appelée par le site | Code envoyé ? |
+|---|---|---|
+| Il crée son compte | `POST /auth/register` | ✅ Oui, à l'adresse saisie |
+| Il se connecte avec le **bon** mot de passe | `POST /auth/login` | ✅ Oui, à l'adresse du compte |
+| Il se connecte avec un **mauvais** mot de passe | `POST /auth/login` | ❌ Non (réponse `401`) |
+| Il s'inscrit avec un email **déjà utilisé** | `POST /auth/register` | ❌ Non (réponse `400`) |
+| Il clique sur « Renvoyer le code » (60 s après le dernier envoi) | `POST /auth/otp/resend` | ✅ Oui, un nouveau code ; l'ancien est annulé |
+| Il clique sur « Renvoyer le code » **trop tôt** | `POST /auth/otp/resend` | ❌ Non (réponse `429` avec le délai restant) |
+| Il saisit le code | `POST /auth/otp/verify` | ❌ Non, le code est vérifié |
+
+#### Ce que fait le serveur, étape par étape
+
+```
+  Site                         API                                      Base de données       Boîte mail
+   │                            │                                              │                   │
+   │ POST /auth/login           │                                              │                   │
+   │ {email, password} ───────► │ 1. vérifie le mot de passe                   │                   │
+   │                            │ 2. tire un code au hasard : 482913           │                   │
+   │                            │ 3. enregistre le code HACHÉ, l'expiration ─► │ otp_code_hash     │
+   │                            │    (+10 min) et remet les essais à 0         │ otp_expires_at    │
+   │                            │                                              │ otp_attempts = 0  │
+   │ ◄───────────────────────── │ 4. répond {message, otp_token}               │                   │
+   │                            │ 5. APRÈS la réponse, envoie l'email ──────────────────────────► │ « Votre code… »
+   │                            │                                              │                   │
+   │ POST /auth/otp/verify      │                                              │                   │
+   │ {otp_token, code} ───────► │ 6. retrouve le compte grâce à l'otp_token    │                   │
+   │                            │ 7. compare le code au hash ◄───────────────► │                   │
+   │                            │ 8. efface le code (usage unique) ──────────► │ otp_* vidés       │
+   │ ◄───────────────────────── │ 9. répond {access_token, refresh_token}      │                   │
+```
+
+Points importants :
+
+- Le code en clair **n'existe que dans l'email**. La base ne contient que son empreinte (HMAC-SHA256 avec `JWT_SECRET_KEY`) : même quelqu'un qui lirait la base ne pourrait pas retrouver le code.
+- Chaque nouvel envoi **remplace** le code précédent : seul le dernier code reçu fonctionne.
+- L'email part **en tâche de fond**, après la réponse (étape 5). L'API répond donc immédiatement, même si le serveur SMTP est lent.
+
+#### Exemple complet (requêtes et réponses)
+
+**1. Connexion**
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{"email": "awa@exemple.com", "password": "MotDePasse123"}
+```
+
+```json
+{
+  "message": "Un code de connexion a été envoyé par email.",
+  "otp_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+
+**2. Email reçu par l'utilisateur**
+
+```
+De      : PyCon CI <adresse@gmail.com>          (valeur de SMTP_FROM)
+À       : awa@exemple.com
+Objet   : Votre code de connexion PyCon CI
+
+Votre code de connexion est : 482913
+Il expire dans 10 minutes et ne peut être utilisé qu'une seule fois.
+Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.
+```
+
+**3. Saisie du code** (l'utilisateur tape `482913`, le site ajoute l'`otp_token` qu'il a gardé)
+
+```http
+POST /auth/otp/verify
+Content-Type: application/json
+
+{"otp_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...", "code": "482913"}
+```
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer"
+}
+```
+
+L'inscription fonctionne exactement pareil : `POST /auth/register` avec `{"email", "full_name", "password"}` renvoie aussi `{message, otp_token}`.
+
+#### Configurer l'envoi (SMTP)
+
+L'envoi passe par le SMTP configuré dans `.env`, le même que pour le mot de passe oublié.
+
+**Avec Gmail**, pas à pas :
+
+1. Activer la **validation en deux étapes** sur le compte Gmail d'envoi : https://myaccount.google.com/security
+2. Créer un **mot de passe d'application** : https://myaccount.google.com/apppasswords (nom libre, par exemple « PyCon CI »). Google affiche 16 lettres.
+3. Renseigner `.env` :
+
+   ```env
+   SMTP_HOST=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_USER=adresse@gmail.com
+   SMTP_PASSWORD=abcdefghijklmnop     # les 16 lettres, pas le mot de passe Gmail
+   SMTP_FROM=PyCon CI <adresse@gmail.com>
+   SMTP_STARTTLS=true
+   SMTP_USE_SSL=false
+   OTP_EXPIRE_MINUTES=10              # optionnel, 10 par défaut
+   ```
+
+4. **Redémarrer le serveur** : le `.env` n'est lu qu'au démarrage, et le rechargement automatique (`--reload`) ne surveille pas ce fichier ; le modifier seul ne suffit donc pas.
+
+**En développement, sans SMTP** : laisser `SMTP_HOST` vide. Aucun email ne part ; le code s'affiche dans la console du serveur :
+
+```
+[Email] À: awa@exemple.com, sujet: Votre code de connexion PyCon CI
+Votre code de connexion est : 482913
+Il expire dans 10 minutes et ne peut être utilisé qu'une seule fois.
+Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.
+```
+
+**Pendant les tests automatisés** : aucun email n'est jamais envoyé, quelle que soit la configuration. `tests/conftest.py` vide `SMTP_HOST` et capture les emails d'authentification dans une boîte de test (`OUTBOX` dans `tests/helpers.py`), où les tests lisent le code.
+
+#### Si l'utilisateur ne reçoit pas le code
+
+Un échec d'envoi **ne bloque pas** l'API : `register` et `login` répondent quand même `200`, et l'erreur est écrite dans les logs du serveur :
+
+```
+Échec de l'envoi de l'email à awa@exemple.com (sujet: Votre code de connexion PyCon CI)
+```
+
+Il faut donc **regarder les logs du serveur** pour comprendre :
+
+| Ce que montrent les logs | Cause | Solution |
+|---|---|---|
+| Une ligne `[Email] À: ...` et rien d'autre | `SMTP_HOST` est vide : mode développement | Renseigner le SMTP dans `.env` et redémarrer |
+| `535 5.7.8 Username and Password not accepted` | Identifiants Gmail refusés | Utiliser un **mot de passe d'application**, pas le mot de passe du compte |
+| `Connection unexpectedly closed` ou `WinError 10053` | Un antivirus intercepte le SMTP (ex. « Mail Shield » d'AVG / Avast) | Exception pour `smtp.gmail.com` et le Python du projet, ou désactiver l'analyse des emails sortants |
+| `CERTIFICATE_VERIFY_FAILED` | Même cause : antivirus qui intercepte la connexion | Même solution |
+| Aucune erreur | L'email est parti | Vérifier les **spams** de l'utilisateur et l'orthographe de son adresse |
+
+Côté utilisateur : cliquer sur **« Renvoyer le code »** (après 60 secondes), ou se reconnecter si plus de 10 minutes se sont écoulées.
+
+### Tester sans le site
+
+Dans Swagger (http://localhost:8000/docs) :
+
+1. Ouvrir `POST /auth/login` → **Try it out** → saisir `{"email": "...", "password": "..."}` → **Execute**.
+2. Dans la réponse, copier la valeur de `otp_token` (sans les guillemets).
+3. Récupérer le code à 6 chiffres :
+   - dans la boîte mail du compte si le SMTP est configuré ;
+   - sinon dans la console du serveur, sur la ligne qui suit `[Email] À: ...`.
+4. Ouvrir `POST /auth/otp/verify` → **Try it out** → saisir `{"otp_token": "<collé à l'étape 2>", "code": "<les 6 chiffres>"}` → **Execute**.
+5. Copier l'`access_token` de la réponse, cliquer sur **Authorize** en haut de la page, le coller, puis valider.
+6. Les routes protégées (`GET /auth/me`, `POST /cfp/submissions`, …) sont maintenant accessibles.
+
+Pour tester le renvoi : après l'étape 2, attendre 60 secondes, ouvrir `POST /auth/otp/resend` et saisir `{"otp_token": "<collé à l'étape 2>"}`. Un nouveau code arrive ; utiliser l'`otp_token` de **cette** réponse à l'étape 4.
+
+> ⏱ Les étapes 1 à 4 doivent tenir en **10 minutes**. Au-delà, recommencer à l'étape 1. Après 5 codes faux, utiliser le renvoi ou recommencer à l'étape 1.
 
 ---
 
@@ -402,7 +652,7 @@ GET /translations/?entity_type=article&entity_id=1&language=en
 
 | Mesure | Détail |
 |---|---|
-| **Rate limiting** | `POST /auth/login`, `/auth/register` et `/auth/reset-password` : 5 requêtes/minute par IP · `POST /auth/forgot-password` : 3 requêtes/minute par IP · `POST /conduct-reports/` : 3 requêtes/heure par IP |
+| **Rate limiting** | `POST /auth/login`, `/auth/register`, `/auth/reset-password` et `/auth/otp/verify` : 5 requêtes/minute par IP · `POST /auth/forgot-password` et `/auth/otp/resend` : 3 requêtes/minute par IP (et 60 s minimum entre deux codes renvoyés) · `POST /conduct-reports/` : 3 requêtes/heure par IP |
 | **Validation stricte** | Longueurs minimales et maximales sur les champs sensibles (ex. signalements : 10 à 3000 caractères) |
 | **Taille des requêtes** | Corps de requête limité à 1 Mo, rejeté avec `413` au-delà |
 | **CORS** | Origines strictement limitées via `ALLOWED_ORIGINS`, jamais de wildcard combiné aux identifiants |
@@ -501,6 +751,8 @@ docker exec -it pyconci_api alembic downgrade <revision>
 | POST | `/auth/refresh` | Public |
 | POST | `/auth/forgot-password` | Public |
 | POST | `/auth/reset-password` | Public (token reçu par email) |
+| POST | `/auth/otp/verify` | Public (`otp_token` + code reçu par email) |
+| POST | `/auth/otp/resend` | Public (`otp_token`) |
 | GET | `/auth/me` | Authentifié |
 
 ### CFP
@@ -595,7 +847,7 @@ docker exec -it pyconci_api alembic downgrade <revision>
 
 Développement réalisé sur un chronogramme de **deux semaines** (02 → 16 août 2026), couvrant successivement : mise en place du projet, authentification, CFP, billetterie, paiement, programme, intervenants, sponsors, blog, code de conduite, back-office, multilinguisme, sécurité, sauvegardes, tests automatisés, puis une phase finale de **revue de code et de préparation à l'intégration front-end**.
 
-> ✅ 28 tests automatisés passants · Documentation Swagger complète · Sauvegardes automatisées validées · CORS et modèle de quotas consolidés pour l'intégration front-end.
+> ✅ 41 tests automatisés passants · Documentation Swagger complète · Sauvegardes automatisées validées · CORS et modèle de quotas consolidés pour l'intégration front-end.
 
 ---
 

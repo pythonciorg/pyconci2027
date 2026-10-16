@@ -2,6 +2,7 @@ import pytest
 
 from app.models.user import User, UserRole
 from app.core.security import get_password_hash
+from tests.helpers import login
 
 
 async def _register_and_login(client, email="speaker@pyconci.ci", role_setup=None):
@@ -9,8 +10,7 @@ async def _register_and_login(client, email="speaker@pyconci.ci", role_setup=Non
         "/auth/register",
         json={"email": email, "full_name": "Speaker Test", "password": "MotDePasse123"},
     )
-    login = await client.post("/auth/login", json={"email": email, "password": "MotDePasse123"})
-    return login.json()["access_token"]
+    return await login(client, email)
 
 
 async def _create_admin_and_login(client, db_session, email="admin-cfp@pyconci.ci"):
@@ -23,8 +23,7 @@ async def _create_admin_and_login(client, db_session, email="admin-cfp@pyconci.c
     db_session.add(admin)
     await db_session.commit()
 
-    login = await client.post("/auth/login", json={"email": email, "password": "MotDePasse123"})
-    return login.json()["access_token"]
+    return await login(client, email)
 
 
 @pytest.mark.asyncio

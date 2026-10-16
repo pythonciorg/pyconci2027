@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -48,6 +49,27 @@ def create_password_reset_token(user_id: int, hashed_password: str) -> str:
 
 def verify_password_reset_token(payload: dict[str, Any], hashed_password: str) -> bool:
     return hmac.compare_digest(str(payload.get("pwd", "")), _password_fingerprint(hashed_password))
+
+
+def create_otp_token(user_id: int) -> str:
+    # Accompagne le code à 6 chiffres : il indique à quel compte le code appartient,
+    # pour que l'utilisateur n'ait à saisir que le code.
+    expire = datetime.utcnow() + timedelta(minutes=settings.otp_expire_minutes)
+    return jwt.encode({"sub": str(user_id), "exp": expire, "type": "otp"}, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def generate_otp_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_otp_code(code: str) -> str:
+    # HMAC avec la clé secrète plutôt qu'un simple SHA-256 : avec seulement un million
+    # de codes possibles, un hash sans clé se retrouverait instantanément par force brute.
+    return hmac.new(settings.jwt_secret_key.encode(), code.encode(), hashlib.sha256).hexdigest()
+
+
+def verify_otp_code(code: str, code_hash: str) -> bool:
+    return hmac.compare_digest(hash_otp_code(code), code_hash)
 
 
 def decode_token(token: str) -> dict[str, Any]:

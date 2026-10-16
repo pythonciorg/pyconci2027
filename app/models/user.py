@@ -25,6 +25,11 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(SAEnum(UserRole), nullable=False, default=UserRole.participant)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    # Code de connexion envoyé par email (stocké haché, à usage unique).
+    otp_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    otp_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    otp_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     submissions: Mapped[list["CFPSubmission"]] = relationship("CFPSubmission", back_populates="speaker", cascade="all, delete-orphan")
     speaker_profile: Mapped[Optional["Speaker"]] = relationship("Speaker", back_populates="user", uselist=False)
